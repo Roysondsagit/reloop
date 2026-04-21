@@ -1,0 +1,35 @@
+# --- Core Framework (FastAPI 2026 Standards) ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.12     # Critical for Image Uploads
+python-dotenv>=1.0.1
+httpx>=0.28.0                # Async client
+
+# --- Database (Vector Search) ---
+qdrant-client>=1.13.0        # Connects to Qdrant
+
+# --- Computer Vision ---
+ultralytics>=8.3.0           # YOLOv11 Logic
+transformers>=4.45.0         # Florence-2 Vision Agent
+sentencepiece>=0.2.0         # Required by SigLIP tokenizer backend
+timm>=1.0.9                  # Required for Florence-2 backbone
+einops>=0.8.0                # Required for Florence-2 tensor ops
+torch>=2.4.0                 # PyTorch (Core AI Engine)
+torchvision>=0.19.0          # Image processing for PyTorch
+accelerate>=0.26.0           # For CUDA
+
+# --- Embeddings & Image Processing ---
+fastembed-gpu>=0.5.0         # Vector Embeddings (CUDA Enabled)
+pillow>=11.0.0               # Image manipulation
+numpy>=1.26.0                # Math ops
+
+# --- Audio Intelligence ---
+# UPDATED: Using the 2025 release to match your timeline
+openai-whisper>=20250625     # Stable 2025 release
+soundfile>=0.13.0            # Audio file reading
+
+# --- B2B Industrial Agent ---
+pymupdf>=1.25.0              # Reads PDF Manifests/Purchase Orders
+
+# --- Advanced Reasoning ---
+google-genai>=1.0.0          # Gemini API

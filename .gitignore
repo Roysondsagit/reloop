@@ -1,0 +1,34 @@
+# --- 1. Python Internals (The __pycache__ folders in agents, database, utils) ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.venv312/
+.env
+
+# --- 2. Runtime Data & Logs (Specific to your tree) ---
+# You have these in your 'data' folder - do not upload them.
+data/feedback_log.json
+data/processed/
+*.log
+
+# --- 3. Local Databases (The 'qdrant_db' folder in your tree) ---
+qdrant_db/
+
+# --- 4. Temporary Uploads ---
+temp_uploads/
+
+# --- 5. Heavy AI Models ---
+# The user will download these via setup.sh
+*.pt
+*.onnx
+
+# --- 6. IDE & OS Junk ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- 7. Research & Development ---
+R&D/
