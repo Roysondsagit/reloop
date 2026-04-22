@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ReLoop Industrial Symbiosis Engine - Full AWS Infrastructure Stack.
+  Provisions: S3 Bucket, SNS Topic, IAM User + Policy, Lambda Function,
+  Lambda SNS Trigger, and CloudWatch Log Group.
+
+# =============================================================================
+# PARAMETERS (Fill these when deploying via AWS Console or CLI)
+# =============================================================================
+Parameters:
+
+  AppEnvironment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging]
+    Description: Deployment environment
+
+  S3BucketName:
+    Type: String
+    Default: reloop-waste-uploads
+    Description: Name for the S3 bucket (must be globally unique)
+
+  SNSTopicName:
+    Type: String
+    Default: reloop-alerts
+    Description: Name for the SNS topic
+
+  AlertEmail:
+    Type: String
+    Description: Email address to receive hazardous waste SNS alerts
+    Default: your-email@example.com
+
+# =============================================================================
+# RESOURCES
+# =============================================================================
+Resources:
+
+  # ─── S3 Bucket ──────────────────────────────────────────────────────────────
+  ReLoopS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteTempUploadsAfter7Days
+            Status: Enabled
+            Filter:
+              Prefix: raw-uploads/
+            ExpirationInDays: 7
+          - Id: ArchiveAnnotatedAfter30Days
+            Status: Enabled
+            Filter:
+              Prefix: annotated/
+            ExpirationInDays: 30
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins: ["*"]
+            MaxAge: 3000
+      Tags:
+        - Key: Project
+          Value: ReLoop
+        - Key: Environment
+          Value: !Ref AppEnvironment
+
+  # ─── SNS Topic ──────────────────────────────────────────────────────────────
+  ReLoopSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref SNSTopicName
+      DisplayName: ReLoop Waste Alerts
+      Tags:
+        - Key: Project
+          Value: ReLoop
+
+  # Email subscription for hazardous alerts
+  ReLoopEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ReLoopSNSTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ─── IAM User for Application (EC2 / Backend) ───────────────────────────────
+  ReLoopAppUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: reloop-app-user
+      Tags:
+        - Key: Project
+          Value: ReLoop
+
+  ReLoopAppAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref ReLoopAppUser
+
+  ReLoopAppPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ReLoopAppPolicy
+      Users:
+        - !Ref ReLoopAppUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3Access
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt ReLoopS3Bucket.Arn
+              - !Sub "${ReLoopS3Bucket.Arn}/*"
+          - Sid: SNSPublish
+            Effect: Allow
+            Action:
+              - sns:Publish
+              - sns:GetTopicAttributes
+            Resource: !Ref ReLoopSNSTopic
+          - Sid: SSMRead
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/reloop/*"
+
+  # ─── IAM Role for Lambda ────────────────────────────────────────────────────
+  ReLoopLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: reloop-lambda-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ReLoopLambdaS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "${ReLoopS3Bucket.Arn}/*"
+      Tags:
+        - Key: Project
+          Value: ReLoop
+
+  # ─── CloudWatch Log Group for Lambda ────────────────────────────────────────
+  ReLoopLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /reloop/lambda/sns-processor
+      RetentionInDays: 30
+
+  # ─── Lambda Function ────────────────────────────────────────────────────────
+  ReLoopSNSProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: reloop-sns-processor
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt ReLoopLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          S3_BUCKET_NAME: !Ref S3BucketName
+      Code:
+        ZipFile: |
+          import json, logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          def lambda_handler(event, context):
+              logger.info(f"Event: {json.dumps(event)}")
+              return {"statusCode": 200, "body": "OK"}
+      # NOTE: Replace the inline ZipFile above with your actual deployment package.
+      # See aws/lambda/sns_processor/index.py for the full implementation.
+      Tags:
+        - Key: Project
+          Value: ReLoop
+
+  # ─── SNS → Lambda Trigger ───────────────────────────────────────────────────
+  ReLoopLambdaSNSTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: ReLoopSNSTopicLambdaSubscription
+    Properties: {}  # Managed via SNS subscription below
+
+  ReLoopSNSTopicLambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ReLoopSNSTopic
+      Protocol: lambda
+      Endpoint: !GetAtt ReLoopSNSProcessorLambda.Arn
+
+  ReLoopLambdaSNSPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ReLoopSNSProcessorLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref ReLoopSNSTopic
+
+  # ─── SSM Parameter Store (Store secrets safely) ─────────────────────────────
+  ReLoopS3BucketParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /reloop/prod/S3_BUCKET_NAME
+      Type: String
+      Value: !Ref S3BucketName
+      Description: ReLoop S3 bucket name
+
+  ReLoopSNSTopicParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /reloop/prod/SNS_TOPIC_ARN
+      Type: String
+      Value: !Ref ReLoopSNSTopic
+      Description: ReLoop SNS Topic ARN
+
+# =============================================================================
+# OUTPUTS (Shown after stack creation in CloudFormation console)
+# =============================================================================
+Outputs:
+
+  S3BucketName:
+    Description: "ReLoop S3 bucket name"
+    Value: !Ref ReLoopS3Bucket
+    Export:
+      Name: ReLoopS3BucketName
+
+  SNSTopicArn:
+    Description: "ReLoop SNS Topic ARN — set this as SNS_TOPIC_ARN in your .env"
+    Value: !Ref ReLoopSNSTopic
+    Export:
+      Name: ReLoopSNSTopicArn
+
+  LambdaFunctionArn:
+    Description: "ReLoop SNS Processor Lambda ARN"
+    Value: !GetAtt ReLoopSNSProcessorLambda.Arn
+
+  AppUserAccessKeyId:
+    Description: "IAM Access Key ID for the app user — set as AWS_ACCESS_KEY_ID in .env"
+    Value: !Ref ReLoopAppAccessKey
+
+  AppUserSecretAccessKey:
+    Description: "IAM Secret Access Key — set as AWS_SECRET_ACCESS_KEY in .env (store securely!)"
+    Value: !GetAtt ReLoopAppAccessKey.SecretAccessKey

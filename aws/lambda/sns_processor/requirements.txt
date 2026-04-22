@@ -1,0 +1,2 @@
+# Lambda function has no extra deps beyond the standard boto3 (pre-installed in Lambda runtime)
+# boto3 is already available in the AWS Lambda Python 3.11 runtime

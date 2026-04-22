@@ -1,0 +1,57 @@
+version: "3.9"
+
+# =============================================================================
+# ReLoop: docker-compose.yml
+# Use this for LOCAL TESTING before deploying to AWS.
+# Run: docker-compose up --build
+# =============================================================================
+
+services:
+
+  # ─── Backend + Frontend (FastAPI serving built React) ──────────────────────
+  reloop-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reloop-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env                    # Copy .env.example → .env and fill your values
+    environment:
+      - APP_ENV=local
+      - ALLOWED_ORIGINS=http://localhost:8000,http://localhost:5173
+    volumes:
+      # Persist local Qdrant DB between container restarts (dev only)
+      - qdrant_data:/app/qdrant_db
+      # Persist temp uploads
+      - ./temp_uploads:/app/temp_uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ─── Frontend Dev Server (Hot Reload) ───────────────────────────────────────
+  # Only use this when developing the frontend.
+  # Comment out when testing the full Docker build.
+  reloop-frontend-dev:
+    image: node:20-alpine
+    container_name: reloop-frontend-dev
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    profiles:
+      - dev                     # Only starts with: docker-compose --profile dev up
+
+volumes:
+  qdrant_data:
+    driver: local

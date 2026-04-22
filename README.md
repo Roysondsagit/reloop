@@ -136,3 +136,109 @@ npm run dev
 - **Market:** Click the 'Layout' icon to switch to B2B Market view.
 
 - **Upload:** Use the "Import Manifest" button to upload a factory PDF requirement.
+
+---
+
+## ☁️ AWS Deployment Guide
+
+ReLoop is fully AWS-ready. The infrastructure uses 5 AWS services:
+
+| Service | Role in ReLoop |
+|---------|---------------|
+| **S3** | Stores uploaded waste images & annotated AI results |
+| **SNS** | Publishes hazardous waste alerts & scan completion events |
+| **Lambda** | Processes SNS events (logging, alerting, analytics) |
+| **IAM** | Least-privilege access for app user + Lambda execution role |
+| **Qdrant Cloud** | Persists vector memory across deployments (replaces local Qdrant) |
+
+### Architecture
+
+```
+User → EC2 (FastAPI + React)
+         ├── S3        ← uploads raw + annotated images
+         ├── SNS       ← publishes hazardous alerts & scan events
+         │    └── Lambda → processes events → CloudWatch + S3 logs
+         └── Qdrant Cloud ← persists AI memory (corrections + market data)
+```
+
+### Step 1: Set Up Qdrant Cloud
+
+1. Go to [cloud.qdrant.io](https://cloud.qdrant.io) → create a free cluster
+2. Copy your **Cluster URL** and **API Key**
+3. Add to `.env`:
+   ```
+   QDRANT_URL=https://your-cluster.aws.cloud.qdrant.io
+   QDRANT_API_KEY=your_key_here
+   ```
+
+### Step 2: Deploy AWS Infrastructure (CloudFormation)
+
+```bash
+# This creates S3, SNS, IAM user, Lambda, and SSM params in one command
+aws cloudformation deploy \
+  --template-file aws/cloudformation.yaml \
+  --stack-name reloop-infra \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region ap-south-1 \
+  --parameter-overrides \
+    S3BucketName=reloop-waste-uploads \
+    AlertEmail=your-email@example.com
+```
+
+After deployment, copy the **Outputs** from the CloudFormation console into your `.env` file.
+
+### Step 3: Configure Environment
+
+```bash
+# Copy template and fill in your values
+cp .env.example .env
+```
+
+Required variables:
+```env
+GEMINI_API_KEY=...
+QDRANT_URL=...
+QDRANT_API_KEY=...
+AWS_ACCESS_KEY_ID=...         # From CloudFormation Outputs
+AWS_SECRET_ACCESS_KEY=...     # From CloudFormation Outputs
+AWS_REGION=ap-south-1
+S3_BUCKET_NAME=reloop-waste-uploads
+SNS_TOPIC_ARN=arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:reloop-alerts
+```
+
+### Step 4: Build & Deploy with Docker
+
+```bash
+# Option A: Local test first
+docker-compose up --build
+
+# Option B: One-click deploy to EC2
+bash aws/deploy.sh
+```
+
+### Step 5: Build Frontend for Production
+
+```bash
+cd frontend
+npm install
+npm run build
+# → Output lands in ../static/ (FastAPI serves it at GET /)
+```
+
+### EC2 Recommended Instance
+
+| Use Case | Instance Type | GPU |
+|----------|-------------|-----|
+| Demo / Hackathon | `t3.large` (CPU only) | ❌ |
+| Production | `g4dn.xlarge` | ✅ NVIDIA T4 |
+
+### Lambda Function
+
+The SNS Processor Lambda (`aws/lambda/sns_processor/index.py`) automatically:
+- Logs all scan events to CloudWatch
+- Sends `🚨 ALERT` for hazardous waste detections
+- Archives event JSON to S3 (`event-logs/` prefix)
+
+Deploy it via the AWS Console (Runtime: Python 3.11, Handler: `index.lambda_handler`).
+
+---

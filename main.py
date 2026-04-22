@@ -8,89 +8,141 @@ from pydantic import BaseModel
 import uvicorn
 import os
 import random
-import time
+import logging
 
-app = FastAPI(title="ReLoop: Industrial Symbiosis Engine")
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- 1. NUCLEAR CORS FIX (Permits All Local Traffic) ---
+app = FastAPI(
+    title="ReLoop: Industrial Symbiosis Engine",
+    version="2.0.0",
+    description="AI-powered waste classification and industrial material matching engine."
+)
+
+# --- CORS Configuration (Environment-Driven) ---
+raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000")
+allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex='https?://.*',
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/temp_uploads", StaticFiles(directory="temp_uploads"),
-          name="temp_uploads")
+# --- Static File Serving (Safe Mounts) ---
+# Serve built React frontend
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Serve temp annotated image crops (created at runtime)
+os.makedirs("temp_uploads/crops", exist_ok=True)
+app.mount("/temp_uploads", StaticFiles(directory="temp_uploads"), name="temp_uploads")
 
 
+# --- Request Models ---
 class FeedbackRequest(BaseModel):
     image_path: str
     predicted_label: str
     correct_label: str
 
 
-@app.get("/")
-async def root(): return FileResponse("static/index.html")
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.get("/health", tags=["Infrastructure"])
+async def health_check():
+    """
+    AWS ALB / ECS health check endpoint.
+    Returns 200 OK when the service is running.
+    """
+    return {"status": "healthy", "service": "reloop-api", "version": "2.0.0"}
 
 
-@app.post("/analyze-image")
+@app.get("/", tags=["Frontend"])
+async def root():
+    """Serves the built React frontend index page."""
+    index_path = "static/index.html"
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse(
+        status_code=200,
+        content={"message": "ReLoop API is running. Build the frontend to see the UI."}
+    )
+
+
+@app.post("/analyze-image", tags=["AI Engine"])
 async def analyze(image: UploadFile = File(...), audio: UploadFile = File(None)):
-    # --- DEBUG LOGGING ---
+    """
+    Core endpoint: Receives waste image + optional voice audio.
+    Returns AI classification, contamination score, factory match, and S3 URLs.
+    """
     if audio:
-        print(
-            f"📥 API: Received Audio File: {audio.filename} ({audio.content_type})")
+        logger.info(f"📥 API: Received Audio: {audio.filename} ({audio.content_type})")
     else:
-        print("⚠️ API: No Audio File Received in request body.")
+        logger.info("⚠️ API: No Audio received.")
 
     return await process_waste_request(image, audio)
 
 
-@app.post("/feedback")
+@app.post("/feedback", tags=["AI Engine"])
 async def feedback(data: FeedbackRequest):
+    """
+    Human-in-the-loop: Records a user correction to the Memory Agent (Qdrant).
+    """
     local_path = data.image_path.lstrip("/")
-    result_id = await register_user_correction(local_path, data.correct_label, data.predicted_label)
+    result_id = await register_user_correction(
+        local_path, data.correct_label, data.predicted_label
+    )
     return {"status": "success", "id": result_id}
 
 
-# ... (Rest of main.py - get_live_activity, upload_manifest, etc.) ...
-@app.post("/upload-manifest")
+@app.post("/upload-manifest", tags=["B2B Market"])
 async def upload_manifest(pdf: UploadFile = File(...)):
+    """
+    Ingests a factory procurement PDF.
+    Vectorizes it and pushes demand data into Qdrant.
+    """
     from agents.orchestrator import process_manifest_upload
     return await process_manifest_upload(pdf)
 
 
-@app.get("/live-activity")
+@app.get("/live-activity", tags=["Dashboard"])
 async def get_live_activity():
-    # Center: Mumbai (Fort / CST region)
+    """
+    Returns live waste-ping data for the city map dashboard.
+    (Seeded with Mumbai coordinates for demo.)
+    """
     center_lat, center_lon = 19.0760, 72.8777
-    dummy_pings = []
     materials = ["Plastic", "Glass", "Metal", "Bio-Medical", "MLP"]
 
-    for i in range(12):
-        lat = center_lat + random.uniform(-0.04, 0.04)
-        lon = center_lon + random.uniform(-0.04, 0.04)
-        mat = random.choice(materials)
-        dummy_pings.append({
-            "id": f"ping_{i}", "lat": lat, "lon": lon, "type": "supply", "material": mat
-        })
+    dummy_pings = [
+        {
+            "id": f"ping_{i}",
+            "lat": center_lat + random.uniform(-0.04, 0.04),
+            "lon": center_lon + random.uniform(-0.04, 0.04),
+            "type": "supply",
+            "material": random.choice(materials),
+        }
+        for i in range(12)
+    ]
 
     factories = [
-        {"id": "f1", "lat": 19.088, "lon": 72.885,
-            "name": "GreenCycle", "material": "Plastic"},
-        {"id": "f2", "lat": 19.062, "lon": 72.848,
-            "name": "Alum-X", "material": "Metal"},
-        {"id": "f3", "lat": 19.102, "lon": 72.901,
-            "name": "PolyFuel", "material": "MLP"},
+        {"id": "f1", "lat": 19.088, "lon": 72.885, "name": "GreenCycle", "material": "Plastic"},
+        {"id": "f2", "lat": 19.062, "lon": 72.848, "name": "Alum-X", "material": "Metal"},
+        {"id": "f3", "lat": 19.102, "lon": 72.901, "name": "PolyFuel", "material": "MLP"},
     ]
 
     return {
         "pings": dummy_pings,
         "factories": factories,
-        "stats": {"active_users": 142, "kg_collected": 850}
+        "stats": {"active_users": 142, "kg_collected": 850},
     }
 
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("APP_PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

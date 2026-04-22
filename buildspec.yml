@@ -1,0 +1,63 @@
+# =============================================================================
+# ReLoop: AWS CodeBuild Specification
+# This file defines the CI/CD pipeline for building and pushing
+# the Docker image to Amazon ECR, then deploying to ECS or EC2.
+#
+# Usage: Connect this repo to AWS CodeBuild and point to this file.
+# =============================================================================
+
+version: 0.2
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: "ap-south-1"
+    ECR_REPO_NAME: "reloop-engine"
+    CONTAINER_NAME: "reloop-api"
+  # These secrets are pulled from AWS Secrets Manager / Parameter Store
+  parameter-store:
+    QDRANT_URL: "/reloop/prod/QDRANT_URL"
+    QDRANT_API_KEY: "/reloop/prod/QDRANT_API_KEY"
+    GEMINI_API_KEY: "/reloop/prod/GEMINI_API_KEY"
+    SNS_TOPIC_ARN: "/reloop/prod/SNS_TOPIC_ARN"
+    S3_BUCKET_NAME: "/reloop/prod/S3_BUCKET_NAME"
+
+phases:
+
+  # ─── Phase 1: Pre-build ─────────────────────────────────────────────────────
+  pre_build:
+    commands:
+      - echo "📦 Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:-latest}
+      - ECR_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME
+      - echo "🏷️ Image will be tagged as $ECR_URI:$IMAGE_TAG"
+
+  # ─── Phase 2: Build ─────────────────────────────────────────────────────────
+  build:
+    commands:
+      - echo "🔨 Build started on $(date)"
+      - echo "🐳 Building Docker image..."
+      - docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
+      - docker tag $ECR_REPO_NAME:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
+      - docker tag $ECR_REPO_NAME:$IMAGE_TAG $ECR_URI:latest
+
+  # ─── Phase 3: Post-build ────────────────────────────────────────────────────
+  post_build:
+    commands:
+      - echo "🚀 Pushing image to ECR..."
+      - docker push $ECR_URI:$IMAGE_TAG
+      - docker push $ECR_URI:latest
+      - echo "✅ Docker push complete."
+      - echo "📝 Writing imagedefinitions.json for ECS deployment..."
+      - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $ECR_URI:$IMAGE_TAG > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+
+cache:
+  paths:
+    - "/root/.cache/pip/**/*"
+    - "/root/.npm/**/*"
