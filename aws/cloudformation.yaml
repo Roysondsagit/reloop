@@ -193,11 +193,7 @@ Resources:
         - Key: Project
           Value: ReLoop
 
-  # ─── SNS → Lambda Trigger ───────────────────────────────────────────────────
-  ReLoopLambdaSNSTrigger:
-    Type: AWS::Lambda::EventSourceMapping
-    DependsOn: ReLoopSNSTopicLambdaSubscription
-    Properties: {}  # Managed via SNS subscription below
+
 
   ReLoopSNSTopicLambdaSubscription:
     Type: AWS::SNS::Subscription
