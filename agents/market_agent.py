@@ -157,9 +157,36 @@ class MarketAgent:
             }
         )
 
-        # Removed 'await' - this is the fix
         qdrant.upsert(
             collection_name=COLLECTION_NAME,
             points=[point]
         )
         print(f"🏭 INJECTED: {data['factory_name']} -> {data['material']}")
+
+    def find_buyer(self, material: str):
+        """
+        Searches Qdrant for the highest bidding factory for the given material.
+        """
+        try:
+            vector = list(embedding_model.embed([material]))[0]
+            search_result = qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=vector,
+                limit=1,
+                score_threshold=0.50
+            )
+            
+            if search_result and search_result.points:
+                best_match = search_result.points[0]
+                payload = best_match.payload
+                return {
+                    "factory_name": payload.get("factory_name", "Unknown Buyer"),
+                    "offer_price": payload.get("offer_price", 0),
+                    "requirement_match": "High" if best_match.score > 0.8 else "Medium",
+                    "confidence_score": round(best_match.score, 2)
+                }
+        except Exception as e:
+            print(f"❌ Market Search Error: {e}")
+            
+        return None
+

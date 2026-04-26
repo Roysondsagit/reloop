@@ -634,6 +634,21 @@ async def process_waste(image_path: str, user_lat: float = 28.61, user_lon: floa
     if os.path.exists(preprocessed_path):
         os.remove(preprocessed_path)
 
+    # --- REAL MARKET MATCHMAKING ---
+    best_factory = None
+    if detected_items:
+        # Find the most common specific product in the scan instead of broad category
+        from collections import Counter
+        product_names = [x.product_name for x in detected_items]
+        dominant_product = Counter(product_names).most_common(1)[0][0]
+        
+        from agents.market_agent import MarketAgent
+        m_agent = MarketAgent()
+        best_factory = m_agent.find_buyer(dominant_product)
+
+    if not best_factory:
+        best_factory = {"factory_name": "No Buyer Found", "offer_price": 0.0, "requirement_match": "None", "confidence_score": 0.0}
+
     return {
         "items": [i.model_dump() for i in detected_items],
         "total_items": len(detected_items),
@@ -661,6 +676,6 @@ async def process_waste(image_path: str, user_lat: float = 28.61, user_lon: floa
             "max_contamination_score": round(float(contamination_max), 3),
             "actuator_plan": actuator_plan,
         },
-        "best_factory_match": {"factory_name": "EcoHub", "offer_price": 25.0, "requirement_match": "High", "confidence_score": 0.95},
+        "best_factory_match": best_factory,
         "eco_impact": {"saved_carbon_kg": len(detected_items)*0.5, "credits_earned": len(detected_items)*10, "energy_saved_kwh": len(detected_items)*0.2}
     }
