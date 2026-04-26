@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # 1. Connect
 print("🔌 Connecting to Qdrant...")
 client = get_qdrant_client()
-COLLECTION_NAME = "residua_industrial_v2"
+COLLECTION_NAME = "residua_industrial_v1"
 
 # 2. Check & Delete if exists (Start Fresh)
 collections = client.get_collections()
